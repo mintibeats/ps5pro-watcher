@@ -1,7 +1,6 @@
 {
   "url": "https://www.playstation.com/de-de/ps5/ps5-pro/buy-now/",
-  "start": "09:00",
-  "end": "11:00",
+  "windows": [["09:00", "11:00"], ["14:00", "16:00"]],
   "interval_seconds": 10,
   "open_browser": true,
   "ntfy_topic": "",

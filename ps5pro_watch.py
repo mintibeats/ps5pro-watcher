@@ -204,19 +204,25 @@ def main():
         log(f"{status}  {details}")
         return
 
+    windows = cfg.get("windows") or [[cfg["start"], cfg["end"]]]
+    mins = lambda t: t.hour * 60 + t.minute
+    n = mins(now())
+    # Naechstes Zeitfenster, das noch nicht vorbei ist
+    upcoming = [(s, e) for s, e in windows if mins(parse_hm(e)) > n]
+    if not upcoming:
+        log(f"Alle Zeitfenster ({windows}) fuer heute vorbei, beende.")
+        return
+    cfg["start"], cfg["end"] = upcoming[0]
     start, end = parse_hm(cfg["start"]), parse_hm(cfg["end"])
     if "--now" not in args:
-        # GitHub startet zweimal (wegen Sommer-/Winterzeit). Der Lauf, der mehr
-        # als 60 Min zu frueh kommt, beendet sich sofort.
-        mins_early = (start.hour * 60 + start.minute) - (now().hour * 60 + now().minute)
+        # GitHub startet pro Fenster zweimal (wegen Sommer-/Winterzeit). Der Lauf,
+        # der mehr als 60 Min zu frueh kommt, beendet sich sofort.
+        mins_early = mins(start) - n
         if mins_early > 60:
             log(f"Zu frueh ({mins_early} Min vor {cfg['start']}), der andere Lauf uebernimmt.")
             return
         while now().time() < start:
             time.sleep(10)
-    if now().time() >= end:
-        log(f"Zeitfenster {cfg['start']}-{cfg['end']} schon vorbei, beende.")
-        return
 
     log(f"Start: pruefe alle {cfg['interval_seconds']}s bis {cfg['end']} -> {cfg['url']}")
     start_message(cfg)
