@@ -2,31 +2,33 @@ name: PS5 Pro Watcher
 
 on:
   schedule:
-    # GitHub rechnet in UTC. Zwei Starts decken Winterzeit (UTC+1) und
-    # Sommerzeit (UTC+2) ab. Der zu fruehe Lauf beendet sich sofort.
-    # Start 30 Min vor 9 bzw. 14 Uhr, weil GitHub Cron-Jobs oft etwas verspaetet startet.
-    - cron: "30 6 * * *"    # Fenster 09-11 Uhr
-    - cron: "30 7 * * *"
-    - cron: "30 11 * * *"   # Fenster 14-16 Uhr
-    - cron: "30 12 * * *"
+    # Nur noch Notstart: Die Kette (siehe unten) laeuft rund um die Uhr weiter.
+    # GitHub-Zeitplaene sind unzuverlaessig (am 25.11. kam kein einziger Start).
+    - cron: "17 5 * * *"
+    - cron: "47 10 * * *"
   workflow_dispatch:   # manuell starten ueber "Run workflow"
     inputs:
       mode:
-        description: "once = ein Check, test-alarm = Test-Push, now = sofort bis 11 Uhr"
-        default: "once"
+        description: "chain = Dauerbetrieb, once = ein Check, test-alarm = Test-Push, now = sofort"
+        default: "chain"
+      minutes:
+        description: "Laufzeit pro Kettenglied in Minuten (nur zum Testen aendern)"
+        default: "340"
 
-# Nie zwei Laeufe gleichzeitig (sonst doppelte Alarme)
+# Nie zwei Laeufe gleichzeitig (sonst doppelte Alarme). Ein wartender Lauf wird
+# durch einen neueren ersetzt, so bleibt immer genau eine Kette uebrig.
 concurrency:
-  group: ps5pro
+  group: ${{ (github.event.inputs.mode == '' || github.event.inputs.mode == 'chain') && 'ps5pro' || format('ps5pro-test-{0}', github.run_id) }}
   cancel-in-progress: false
 
 permissions:
-  contents: write   # nur fuer den monatlichen Keepalive-Commit
+  contents: write   # monatlicher Keepalive-Commit
+  actions: write    # naechsten Lauf der Kette starten
 
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -34,12 +36,20 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           MODE: ${{ github.event.inputs.mode }}
+          MAX_RUN_MINUTES: ${{ github.event.inputs.minutes }}
         run: |
           if [ -n "$MODE" ]; then
             python3 ps5pro_watch.py --$MODE
           else
             python3 ps5pro_watch.py
           fi
+
+      # Kette: sofort den naechsten Lauf starten (ein Lauf darf max. 6 h dauern)
+      - name: Naechsten Lauf starten
+        if: always() && (github.event.inputs.mode == '' || github.event.inputs.mode == 'chain')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ps5pro.yml --repo "$GITHUB_REPOSITORY" --ref main -f mode=chain
 
       # GitHub schaltet geplante Workflows nach 60 Tagen ohne Commit ab.
       # Am 1. jedes Monats ein leerer Commit, damit er weiterlaeuft.

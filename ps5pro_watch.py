@@ -21,7 +21,7 @@ import time
 import urllib.error
 import urllib.request
 import webbrowser
-from datetime import datetime, time as dtime
+from datetime import datetime, timedelta, time as dtime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -62,6 +62,8 @@ def load_config():
             cfg.update(json.loads(f.read_text(encoding="utf-8")))
     if os.environ.get("NTFY_TOPIC"):
         cfg["ntfy_topic"] = os.environ["NTFY_TOPIC"]
+    if os.environ.get("MAX_RUN_MINUTES"):
+        cfg["max_run_minutes"] = int(os.environ["MAX_RUN_MINUTES"])
     if IS_CLOUD:
         cfg["open_browser"] = False
     return cfg
@@ -204,31 +206,52 @@ def main():
         log(f"{status}  {details}")
         return
 
-    windows = cfg.get("windows") or [[cfg["start"], cfg["end"]]]
-    mins = lambda t: t.hour * 60 + t.minute
-    n = mins(now())
-    # Naechstes Zeitfenster, das noch nicht vorbei ist
-    upcoming = [(s, e) for s, e in windows if mins(parse_hm(e)) > n]
-    if not upcoming:
-        log(f"Alle Zeitfenster ({windows}) fuer heute vorbei, beende.")
-        return
-    cfg["start"], cfg["end"] = upcoming[0]
-    start, end = parse_hm(cfg["start"]), parse_hm(cfg["end"])
-    if "--now" not in args:
-        # GitHub startet pro Fenster zweimal (wegen Sommer-/Winterzeit). Der Lauf,
-        # der mehr als 60 Min zu frueh kommt, beendet sich sofort.
-        mins_early = mins(start) - n
-        if mins_early > 60:
-            log(f"Zu frueh ({mins_early} Min vor {cfg['start']}), der andere Lauf uebernimmt.")
-            return
-        while now().time() < start:
-            time.sleep(10)
+    chain = "--chain" in args
+    t_begin = now()
+    # GitHub-Jobs duerfen max. 6 h laufen -> nach ca. 5:40 h beenden, der Workflow
+    # startet dann sofort den naechsten Lauf (Kette, unabhaengig vom GitHub-Zeitplan).
+    deadline = t_begin + timedelta(minutes=cfg.get("max_run_minutes", 340)) if IS_CLOUD else None
 
+    while True:
+        sd, ed = next_window(cfg, now())
+        if "--now" in args:
+            sd = now()
+        if deadline and sd >= deadline:
+            log(f"Naechstes Fenster {sd:%d.%m. %H:%M} nach Laufende, Folgelauf uebernimmt.")
+            return
+        if not IS_CLOUD and sd.date() != now().date():
+            log("Alle Zeitfenster fuer heute vorbei, beende.")
+            return
+        waited = now() < sd
+        while now() < sd:
+            time.sleep(10)
+        scan(cfg, ed, deadline, send_start=waited or not chain)
+        if "--now" in args or not IS_CLOUD or (deadline and now() >= deadline):
+            return
+
+
+def next_window(cfg, after):
+    """Naechstes Zeitfenster (start, ende) als Datum+Uhrzeit, das nach 'after' noch nicht vorbei ist."""
+    windows = sorted(cfg.get("windows") or [[cfg["start"], cfg["end"]]])
+    for day in range(3):
+        d = (after + timedelta(days=day)).date()
+        for s, e in windows:
+            sd = datetime.combine(d, parse_hm(s), tzinfo=after.tzinfo)
+            ed = datetime.combine(d, parse_hm(e), tzinfo=after.tzinfo)
+            if ed > after:
+                return sd, ed
+    raise ValueError("keine Zeitfenster in config.json")
+
+
+def scan(cfg, end, deadline, send_start=True):
+    stop = min(end, deadline) if deadline else end
+    cfg["end"] = f"{end:%H:%M}"
     log(f"Start: pruefe alle {cfg['interval_seconds']}s bis {cfg['end']} -> {cfg['url']}")
-    start_message(cfg)
+    if send_start:
+        start_message(cfg)
     last_alarm = 0.0
     checks = 0
-    while now().time() < end:
+    while now() < stop:
         t0 = time.time()
         try:
             status, details = check(cfg["url"])
@@ -247,10 +270,10 @@ def main():
             log(f"HTTP-Fehler {e.code} (evtl. kurz geblockt)")
         except Exception as e:
             log(f"Fehler: {e}")
-        # 20 s +/- ein paar Sekunden, damit es nicht wie ein starrer Bot aussieht
+        # Intervall +/- ein paar Sekunden, damit es nicht wie ein starrer Bot aussieht
         wait = cfg["interval_seconds"] + random.uniform(-2, 2) - (time.time() - t0)
         time.sleep(max(1, wait))
-    log(f"Ende des Zeitfensters, {checks} Checks gemacht.")
+    log(f"Ende des Scans, {checks} Checks gemacht.")
 
 
 if __name__ == "__main__":
