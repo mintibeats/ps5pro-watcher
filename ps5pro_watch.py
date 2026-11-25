@@ -217,7 +217,10 @@ def main():
         if "--now" in args:
             sd = now()
         if deadline and sd >= deadline:
-            log(f"Naechstes Fenster {sd:%d.%m. %H:%M} nach Laufende, Folgelauf uebernimmt.")
+            # Bis zum Laufende warten (nicht sofort beenden, sonst startet die Kette im Sekundentakt)
+            log(f"Naechstes Fenster {sd:%d.%m. %H:%M}, warte bis {deadline:%H:%M}, dann uebernimmt der Folgelauf.")
+            while now() < deadline:
+                time.sleep(30)
             return
         if not IS_CLOUD and sd.date() != now().date():
             log("Alle Zeitfenster fuer heute vorbei, beende.")
