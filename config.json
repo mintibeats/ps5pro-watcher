@@ -1,0 +1,9 @@
+{
+  "url": "https://www.playstation.com/de-de/ps5/ps5-pro/buy-now/",
+  "start": "09:00",
+  "end": "11:00",
+  "interval_seconds": 10,
+  "open_browser": true,
+  "ntfy_topic": "",
+  "alarm_repeat_minutes": 5
+}

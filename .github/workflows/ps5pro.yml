@@ -1,0 +1,60 @@
+name: PS5 Pro Watcher
+
+on:
+  schedule:
+    # GitHub rechnet in UTC. Zwei Starts decken Winterzeit (UTC+1) und
+    # Sommerzeit (UTC+2) ab. Der zu fruehe Lauf beendet sich sofort.
+    # Start 30 Min vor 9 Uhr, weil GitHub Cron-Jobs oft etwas verspaetet startet.
+    - cron: "30 6 * * *"
+    - cron: "30 7 * * *"
+  workflow_dispatch:   # manuell starten ueber "Run workflow"
+    inputs:
+      mode:
+        description: "once = ein Check, test-alarm = Test-Push, now = sofort bis 11 Uhr"
+        default: "once"
+
+# Nie zwei Laeufe gleichzeitig (sonst doppelte Alarme)
+concurrency:
+  group: ps5pro
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # nur fuer den monatlichen Keepalive-Commit
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scraper laufen lassen
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          MODE: ${{ github.event.inputs.mode }}
+        run: |
+          if [ -n "$MODE" ]; then
+            python3 ps5pro_watch.py --$MODE
+          else
+            python3 ps5pro_watch.py
+          fi
+
+      # GitHub schaltet geplante Workflows nach 60 Tagen ohne Commit ab.
+      # Am 1. jedes Monats ein leerer Commit, damit er weiterlaeuft.
+      - name: Keepalive
+        if: github.event_name == 'schedule'
+        run: |
+          if [ "$(date -u +%d)" = "01" ]; then
+            git config user.name "ps5pro-bot"
+            git config user.email "ps5pro-bot@users.noreply.github.com"
+            git commit --allow-empty -m "keepalive"
+            git push
+          fi
+
+      - name: Log hochladen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps5pro-log-${{ github.run_id }}
+          path: ps5pro_watch.log
+          if-no-files-found: ignore
