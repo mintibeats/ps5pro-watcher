@@ -85,7 +85,8 @@ def fetch(url):
         "Pragma": "no-cache",
     })
     with urllib.request.urlopen(req, timeout=20) as r:
-        return r.status, r.geturl(), r.read().decode("utf-8", errors="replace")
+        # Nur den Anfang laden: alle Infos stehen in den ersten ~110 KB (Seite ist 1 MB)
+        return r.status, r.geturl(), r.read(250_000).decode("utf-8", errors="replace")
 
 
 def check(url):
@@ -254,11 +255,13 @@ def scan(cfg, end, deadline, send_start=True):
         start_message(cfg)
     last_alarm = 0.0
     checks = 0
+    blocked = 0
     while now() < stop:
         t0 = time.time()
         try:
             status, details = check(cfg["url"])
             checks += 1
+            blocked = 0
             if status in ("IN_STOCK", "QUEUE"):
                 if time.time() - last_alarm > cfg["alarm_repeat_minutes"] * 60:
                     alarm(cfg, status, details)
@@ -271,6 +274,12 @@ def scan(cfg, end, deadline, send_start=True):
                 log(f"{status}  {details}")
         except urllib.error.HTTPError as e:
             log(f"HTTP-Fehler {e.code} (evtl. kurz geblockt)")
+            blocked = blocked + 1 if e.code in (403, 429) else 0
+            if IS_CLOUD and blocked >= 3:
+                # IP dieses GitHub-Servers ist gesperrt -> beenden, die Kette startet
+                # sofort einen neuen Lauf auf einem anderen Server (neue IP)
+                log("3x gesperrt hintereinander, starte neu auf anderem Server.")
+                sys.exit(0)
         except Exception as e:
             log(f"Fehler: {e}")
         # Intervall +/- ein paar Sekunden, damit es nicht wie ein starrer Bot aussieht
